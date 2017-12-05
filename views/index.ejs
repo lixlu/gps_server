@@ -1,0 +1,36 @@
+<!DOCTYPE html>
+<html>
+<head>
+	<meta http-equiv="Content-Type" content="text/html; charset=utf-8" />
+	<meta name="viewport" content="initial-scale=1.0, user-scalable=no" />
+  <link href="stylesheets/style.css" rel="stylesheet" type="text/css" media="all">
+	<script type="text/javascript" src="http://api.map.baidu.com/api?v=2.0&ak=1Dpl4GUgOR34dU9W4k5aTSFsk37ATsBb"></script>
+	<title>Horizon ADAS GPS Tracker</title>
+</head>
+<body>
+<div id="page" class="container">
+  <div id="header">
+    <div id="logo">
+      <img src="images/logo.png" alt="" />
+      <h1><a href="http://www.horizon.ai/">Horizon Robotics</a></h1>
+      <p><a href="#">ADAS 数据采集车监控系统</a></p>
+      <br></br>
+      <p><span>当前注册车辆： </span><span id="totalnum">9</span></p>
+      <p><span>当前活跃车辆： </span><span id="activenum">0</span></p>
+      <br></br>
+    </div>
+    <div id="menu">
+      <ul>
+        <li>投放区域</li>
+        <li><a href="#" onclick="ChangeCity('beijing')">北京</a></li>
+        <li><a href="#" onclick="ChangeCity('shanghai')">上海</a></li>
+      </ul>
+    </div>
+  </div>
+	<div id="allmap"></div>
+</div>
+</body>
+</html>
+<script src="/socket.io/socket.io.js"></script>
+<script src="javascripts/gps.js"></script>
+

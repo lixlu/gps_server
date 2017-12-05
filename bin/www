@@ -1,0 +1,246 @@
+#!/usr/bin/env node
+
+/**
+ * Module dependencies.
+ */
+
+var app = require('../app');
+var debug = require('debug')('gps-server:server');
+var http = require('http');
+var mosca = require('mosca');
+var fs = require('fs');
+var moment = require('moment');
+
+/**
+ * Get port from environment and store in Express.
+ */
+
+var port = normalizePort(process.env.PORT || '9090');
+app.set('port', port);
+
+/**
+ * Create HTTP server.
+ */
+
+var server = http.createServer(app);
+
+
+/**
+ * Create socket.io server.
+ */
+
+var socket = require('socket.io')(server);
+
+/**
+ * Listen on provided port, on all network interfaces.
+ */
+
+server.listen(port);
+server.on('error', onError);
+server.on('listening', onListening);
+
+/**
+ * Normalize a port into a number, string, or false.
+ */
+
+function normalizePort(val) {
+  var port = parseInt(val, 10);
+
+  if (isNaN(port)) {
+    // named pipe
+    return val;
+  }
+
+  if (port >= 0) {
+    // port number
+    return port;
+  }
+
+  return false;
+}
+
+/**
+ * Event listener for HTTP server "error" event.
+ */
+
+function onError(error) {
+  if (error.syscall !== 'listen') {
+    throw error;
+  }
+
+  var bind = typeof port === 'string'
+    ? 'Pipe ' + port
+    : 'Port ' + port;
+
+  // handle specific listen errors with friendly messages
+  switch (error.code) {
+    case 'EACCES':
+      console.error(bind + ' requires elevated privileges');
+      process.exit(1);
+      break;
+    case 'EADDRINUSE':
+      console.error(bind + ' is already in use');
+      process.exit(1);
+      break;
+    default:
+      throw error;
+  }
+}
+
+/**
+ * Event listener for HTTP server "listening" event.
+ */
+
+function onListening() {
+  var addr = server.address();
+  var bind = typeof addr === 'string'
+    ? 'pipe ' + addr
+    : 'port ' + addr.port;
+  debug('Listening on ' + bind);
+}
+
+/* mqtt */
+
+var message = {
+  topic: '/version',
+  payload: '1.0.1',
+  qos: 1,
+  retain: false
+};
+
+var settings = {
+  port: 1883,
+};
+
+var mqtt_server = new mosca.Server(settings);
+
+var active_cars_num = 0;
+var cars_list = new Array; // 1 for online, 0 for offline now and online ever.
+var cars_list_file = "/home/work/projects/gps_server/history_tracks/cars_list";
+
+// read history cars list from file.
+fs.openSync(cars_list_file, 'a+');
+var data = (fs.readFileSync(cars_list_file, "utf-8")).split('\n');
+console.log("exist cars_list file content is: " + data);
+for (var i = 0, len = data.length - 1; i < len; i++) {
+  console.log(data[i]);
+  cars_list[data[i]] = 0;
+}
+
+function contains(arr, obj) {  
+  for (var key in arr) {
+    if (key === obj) {
+      return true;
+    }
+  }
+  return false;  
+}
+
+// listen on clientConnected topic.
+mqtt_server.on('clientConnected', function(client) {
+  var str = client.id.toString();
+  var car_mac = (str.split(","))[0];
+  console.log('client connected', client.id);
+  console.log("car_mac: " + car_mac);  
+  if (car_mac.length === 12) {
+    if (!contains(cars_list, car_mac)) {
+      console.log("a new car has connected in: " + car_mac);  
+      fs.appendFile(cars_list_file, car_mac + "\n", function(err){  
+        if(err) {
+          console.log("fail " + err);  
+        }
+      });
+      cars_list[car_mac] = 1;
+      active_cars_num++;
+      console.log('active num plus: ', active_cars_num);
+    } else {
+      if (cars_list[car_mac] === 0) {
+        cars_list[car_mac] = 1;
+        active_cars_num++;
+        console.log('active num plus: ', active_cars_num);
+      }
+      socket.emit('online', client.id.toString());
+    }
+  }
+});
+
+// listen on subscribed topic.
+mqtt_server.on('subscribed', function(client) {
+  console.log('client subscribed', client.id);
+  mqtt_server.publish(message, function(){
+    console.log('send version done!');
+  });
+});
+
+// fired when a message is received
+mqtt_server.on('published', function(packet, client) {
+  //var time = new Date().Format(“yyyy-MM-dd HH:mm:ss”);
+  console.log('###Published', packet.payload.toString());
+  console.log('###Time: ', moment().format());
+  console.log('###Topic', packet.topic.toString());
+  if (packet.topic.toString() === "GPS Coordinate") {
+    var str = packet.payload.toString();
+    var devid = (str.split(","))[0];
+    var lon = (str.split(","))[1];
+    var lat = (str.split(","))[2];
+    if (cars_list[devid] === 0) {
+      cars_list[devid] = 1;
+      active_cars_num++;
+      console.log('active num plus: ', active_cars_num);
+    }
+    if (lon !== "0.000000") { // gps device may fail and send 0.000000, ignore it.
+      socket.emit('gps', packet.payload.toString());
+      var fname = "/home/work/projects/gps_server/history_tracks/" + devid;
+      fs.appendFile(fname, lon + "," + lat + "\n", function(err){  
+        if(err) {
+          console.log("fail " + err);  
+        }
+      });
+    }
+  }
+  if (packet.topic.toString() === "LWT") {
+    socket.emit('offline', packet.payload.toString());
+    var str = packet.payload.toString();
+    var devid = (str.split(","))[0];
+    if (cars_list[devid] === 1) {
+      cars_list[devid] = 0;
+      active_cars_num--;
+      console.log('active num minus: ', active_cars_num);
+    }
+  }
+});
+
+var oneSecond = 1000 * 1; // one second = 1000 x 1 ms
+setInterval(function() {
+  socket.emit('active_num', active_cars_num);
+}, oneSecond);
+
+mqtt_server.on('ready', setup);
+
+// Accepts the connection if the username and password are valid
+var authenticate = function(client, username, password, callback) {
+  var authorized = (username === 'AdAsDaTaCoLlEcTiOn' && password.toString() === 'HoRiZoNrObOtIcS');
+  if (authorized) {
+    client.user = username;
+    console.log('authentication success', username, password.toString());
+  }
+  callback(null, authorized);
+}
+
+// In this case the client authorized as alice can publish to /users/alice taking
+// the username from the topic and verifing it is the same of the authorized user
+var authorizePublish = function(client, topic, payload, callback) {
+  callback(null, client.user == topic.split('/')[1]);
+}
+var authorizeSubscribe = function(client, topic, callback) {
+  callback(null, client.user == topic.split('/')[1]);
+}
+
+// fired when the mqtt server is ready
+function setup() {
+  mqtt_server.authenticate = authenticate;
+  //mqtt_server.authorizePublish = authorizePublish;
+  //mqtt_server.authorizeSubscribe = authorizeSubscribe;
+  console.log('Mosca server is up and running');
+}
+// mqtt server done
